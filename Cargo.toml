@@ -1,0 +1,22 @@
+[package]
+name = "mp2json"
+version = "0.1.0"
+edition = "2021"
+authors = ["James Brown <roguelazer@roguelazer.com>"]
+description = "Read any number of msgpack messages from stdin and output them as newline-delimited json to stdout"
+license = "ISC"
+repository = "https://github.com/Roguelazer/mp2json"
+
+[dependencies]
+base64 = "0.13"
+clap = { version = "3", features=["cargo"] }
+json = "0.12"
+rmp = "0.8"
+rmpv = "1.0"
+thiserror = "1"
+
+[dev-dependencies]
+assert_matches = "1"
+
+[profile.release]
+debug = true
