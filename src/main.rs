@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 
+use clap::Parser;
 use json::object::Object as JsonObject;
 use json::JsonValue;
 use rmpv::Value as MpValue;
@@ -17,8 +18,6 @@ pub enum Mp2JsonError {
     RmpDecode(#[from] rmpv::decode::Error),
     #[error("error writing")]
     Output(#[source] std::io::Error),
-    #[error("error opening input file: {0}")]
-    Input(#[source] std::io::Error),
 }
 
 fn convert(r: MpValue) -> Result<JsonValue, Mp2JsonError> {
@@ -50,7 +49,7 @@ fn convert(r: MpValue) -> Result<JsonValue, Mp2JsonError> {
         }
         MpValue::Array(v) => v
             .into_iter()
-            .map(|i| convert(i))
+            .map(convert)
             .collect::<Result<Vec<_>, _>>()?
             .into(),
         MpValue::Map(m) => m
@@ -130,45 +129,32 @@ impl Converter {
     }
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    #[clap(short = 'p', long)]
+    pretty: bool,
+    #[clap(short = 'U', long, help = "Flush input after each message")]
+    unbuffered: bool,
+    #[clap(
+        short,
+        long,
+        default_value = "-",
+        help = "Input path of file to convert from msgpack to JSON (or - for stdin)"
+    )]
+    input: clio::Input,
+}
+
 fn main() -> Result<(), Mp2JsonError> {
-    let matches = clap::App::new(clap::crate_name!())
-        .about(clap::crate_description!())
-        .version(clap::crate_version!())
-        .author(clap::crate_authors!())
-        .arg(
-            clap::Arg::new("pretty")
-                .short('p')
-                .long("pretty")
-                .help("Prettify output"),
-        )
-        .arg(
-            clap::Arg::new("input")
-                .takes_value(true)
-                .default_value("-")
-                .help("Input path of file to convert from msgpack to JSON (or - for stdin)"),
-        )
-        .arg(
-            clap::Arg::new("unbuffered")
-                .long("unbuffered")
-                .help("Flush input after each message"),
-        )
-        .get_matches();
-    let input_path = matches.value_of("input").expect("Must pass input path");
+    let args = Args::parse();
 
     let stdout = std::io::stdout();
     let stdout_h = stdout.lock();
     let c = Converter {
-        buffered: !matches.is_present("unbuffered"),
-        pretty: matches.is_present("pretty"),
+        buffered: !args.unbuffered,
+        pretty: args.pretty,
     };
-    if input_path == "-" {
-        let stdin = std::io::stdin();
-        let stdin_h = stdin.lock();
-        c.run(stdin_h, stdout_h)
-    } else {
-        let f = std::fs::File::open(input_path).map_err(Mp2JsonError::Input)?;
-        c.run(f, stdout_h)
-    }
+    c.run(args.input, stdout_h)
 }
 
 #[cfg(test)]
