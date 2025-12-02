@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 
+use base64::prelude::*;
 use clap::Parser;
 use json::object::Object as JsonObject;
 use json::JsonValue;
@@ -44,7 +45,7 @@ fn convert(r: MpValue) -> Result<JsonValue, Mp2JsonError> {
         MpValue::Binary(b) => {
             let mut o = JsonObject::with_capacity(2);
             o.insert("encoding", "base64".into());
-            o.insert("value", base64::encode(b).into());
+            o.insert("value", BASE64_STANDARD.encode(b).into());
             JsonValue::Object(o)
         }
         MpValue::Array(v) => v
@@ -73,7 +74,7 @@ fn convert(r: MpValue) -> Result<JsonValue, Mp2JsonError> {
             let mut o = JsonObject::with_capacity(3);
             o.insert("type_code", type_code.into());
             o.insert("encoding", "base64".into());
-            o.insert("value", base64::encode(bytes).into());
+            o.insert("value", BASE64_STANDARD.encode(bytes).into());
             o.into()
         }
     };
