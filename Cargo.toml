@@ -10,7 +10,7 @@ repository = "https://github.com/Roguelazer/mp2json"
 [dependencies]
 base64 = "0.13"
 clap = { version = "4", features=["cargo", "derive", "color", "suggestions"] }
-clio = { version = "0.3.4", features = ["clap-parse"] }
+clio = { version = "0.3.5", features = ["clap-parse"] }
 json = "0.12"
 rmp = "0.8"
 rmpv = "1.0"
