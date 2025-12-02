@@ -8,7 +8,7 @@ license = "ISC"
 repository = "https://github.com/Roguelazer/mp2json"
 
 [dependencies]
-base64 = "0.13"
+base64 = "0.22"
 clap = { version = "4", features=["cargo", "derive", "color", "suggestions"] }
 clio = { version = "0.3.4", features = ["clap-parse"] }
 json = "0.12"
