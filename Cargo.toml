@@ -1,7 +1,7 @@
 [package]
 name = "mp2json"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 authors = ["James Brown <roguelazer@roguelazer.com>"]
 description = "Read any number of msgpack messages from stdin and output them as newline-delimited json to stdout"
 license = "ISC"
@@ -18,6 +18,3 @@ thiserror = "1"
 
 [dev-dependencies]
 assert_matches = "1"
-
-[profile.release]
-debug = true
