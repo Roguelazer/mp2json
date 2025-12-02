@@ -2,8 +2,8 @@ use std::io::{Read, Write};
 
 use base64::prelude::*;
 use clap::Parser;
-use json::object::Object as JsonObject;
 use json::JsonValue;
+use json::object::Object as JsonObject;
 use rmpv::Value as MpValue;
 use thiserror::Error;
 
@@ -110,7 +110,7 @@ impl Converter {
                 Err(Mp2JsonError::RmpDecode(rmpv::decode::Error::InvalidMarkerRead(e)))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof =>
                 {
-                    break
+                    break;
                 }
                 Err(e) => return Err(e),
             }
@@ -165,7 +165,7 @@ mod tests {
     use assert_matches::assert_matches;
     use json::JsonValue;
 
-    use super::{read_and_convert_one, Mp2JsonError};
+    use super::{Mp2JsonError, read_and_convert_one};
 
     #[test]
     fn test_smoke() {
