@@ -2,27 +2,15 @@ use std::io::{Read, Write};
 
 use base64::prelude::*;
 use clap::Parser;
-use json::JsonValue;
-use json::object::Object as JsonObject;
 use rmpv::Value as MpValue;
-use thiserror::Error;
+use serde_json::Map as JsonObject;
+use serde_json::Value as JsonValue;
+use tap::Pipe;
 
-#[derive(Debug, Error)]
-pub enum Mp2JsonError {
-    #[error("msgpack string was not UTF-8")]
-    InvalidString,
-    #[error("msgpack integer was not encodable in 64 bits")]
-    InvalidInteger(rmpv::Integer),
-    #[error("Map key is not a string")]
-    MapKeyNotString,
-    #[error("msgpack decode error: {0}")]
-    RmpDecode(#[from] rmpv::decode::Error),
-    #[error("error writing")]
-    Output(#[source] std::io::Error),
-}
+use mp2json::error::{Mp2JsonError, Result};
 
-fn convert(r: MpValue) -> Result<JsonValue, Mp2JsonError> {
-    let jv = match r {
+fn mp2json(r: MpValue) -> Result<JsonValue> {
+    match r {
         MpValue::Nil => JsonValue::Null,
         MpValue::Boolean(b) => b.into(),
         MpValue::Integer(i) => {
@@ -44,13 +32,13 @@ fn convert(r: MpValue) -> Result<JsonValue, Mp2JsonError> {
             .ok_or(Mp2JsonError::InvalidString)?,
         MpValue::Binary(b) => {
             let mut o = JsonObject::with_capacity(2);
-            o.insert("encoding", "base64".into());
-            o.insert("value", BASE64_STANDARD.encode(b).into());
+            o.insert("encoding".to_owned(), "base64".into());
+            o.insert("value".to_owned(), BASE64_STANDARD.encode(b).into());
             JsonValue::Object(o)
         }
         MpValue::Array(v) => v
             .into_iter()
-            .map(convert)
+            .map(mp2json)
             .collect::<Result<Vec<_>, _>>()?
             .into(),
         MpValue::Map(m) => m
@@ -65,25 +53,25 @@ fn convert(r: MpValue) -> Result<JsonValue, Mp2JsonError> {
                 } else {
                     return Err(Mp2JsonError::MapKeyNotString);
                 };
-                let v = convert(v)?;
+                let v = mp2json(v)?;
                 Ok((s, v))
             })
-            .collect::<Result<JsonObject, _>>()?
+            .collect::<Result<JsonObject<String, JsonValue>>>()?
             .into(),
         MpValue::Ext(type_code, bytes) => {
             let mut o = JsonObject::with_capacity(3);
-            o.insert("type_code", type_code.into());
-            o.insert("encoding", "base64".into());
-            o.insert("value", BASE64_STANDARD.encode(bytes).into());
+            o.insert("type_code".to_owned(), type_code.into());
+            o.insert("encoding".to_owned(), "base64".into());
+            o.insert("value".to_owned(), BASE64_STANDARD.encode(bytes).into());
             o.into()
         }
-    };
-    Ok(jv)
+    }
+    .pipe(Ok)
 }
 
-fn read_and_convert_one<R: Read>(r: &mut R) -> Result<JsonValue, Mp2JsonError> {
+fn read_and_mp2json<R: Read>(r: &mut R) -> Result<JsonValue, Mp2JsonError> {
     let value = rmpv::decode::read_value(r)?;
-    convert(value)
+    mp2json(value)
 }
 
 struct Converter {
@@ -92,21 +80,21 @@ struct Converter {
 }
 
 impl Converter {
+    fn write_one<W: Write>(&self, output: &mut W, v: JsonValue) -> Result<()> {
+        if self.pretty {
+            serde_json::to_writer_pretty(&mut *output, &v)
+        } else {
+            serde_json::to_writer(&mut *output, &v)
+        }
+        .map_err(Mp2JsonError::serde_json_output)?;
+        output.write(&[0x0a]).map_err(Mp2JsonError::output)?;
+        Ok(())
+    }
+
     fn run_inner<R: Read, W: Write>(self, mut input: R, mut output: W) -> Result<(), Mp2JsonError> {
         loop {
-            match read_and_convert_one(&mut input) {
-                Ok(v) => {
-                    let write = if self.pretty {
-                        v.write_pretty(&mut output, 2)
-                    } else {
-                        v.write(&mut output)
-                    };
-                    match write.and_then(|_| output.write(&[0x0a])) {
-                        Ok(_) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
-                        Err(e) => return Err(Mp2JsonError::Output(e)),
-                    }
-                }
+            match read_and_mp2json(&mut input) {
+                Ok(v) => self.write_one(&mut output, v)?,
                 Err(Mp2JsonError::RmpDecode(rmpv::decode::Error::InvalidMarkerRead(e)))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof =>
                 {
@@ -119,19 +107,28 @@ impl Converter {
     }
 
     fn run<R: Read, W: Write>(self, input: R, output: W) -> Result<(), Mp2JsonError> {
-        if self.buffered {
+        let res = if self.buffered {
             let mut output = std::io::BufWriter::new(output);
             self.run_inner(std::io::BufReader::new(input), &mut output)?;
-            output.flush().map_err(Mp2JsonError::Output)?;
+            output.flush().map_err(Mp2JsonError::output)?;
             Ok(())
         } else {
             self.run_inner(input, output)
+        };
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) if e.is_broken_pipe() => Ok(()),
+            Err(e) => Err(e),
         }
     }
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about)]
+#[command(
+    author,
+    version,
+    about = "Read concatenated msgpack messages and output newline-delimited JSON"
+)]
 struct Args {
     #[clap(short = 'p', long)]
     pretty: bool,
@@ -163,32 +160,30 @@ mod tests {
     use std::io::Cursor;
 
     use assert_matches::assert_matches;
-    use json::JsonValue;
+    use serde_json::{Value as JsonValue, json};
 
-    use super::{Mp2JsonError, read_and_convert_one};
+    use super::{Mp2JsonError, read_and_mp2json};
 
     #[test]
     fn test_smoke() {
         assert_eq!(
-            read_and_convert_one(&mut Cursor::new(b"\x01")).unwrap(),
+            read_and_mp2json(&mut Cursor::new(b"\x01")).unwrap(),
             JsonValue::Number(1.into())
         );
         assert_eq!(
-            read_and_convert_one(&mut Cursor::new(b"\xc0")).unwrap(),
+            read_and_mp2json(&mut Cursor::new(b"\xc0")).unwrap(),
             JsonValue::Null
         );
         assert_eq!(
-            read_and_convert_one(&mut Cursor::new(b"\x81\xa3foo\xc4\x03bar"))
-                .unwrap()
-                .dump(),
-            r#"{"foo":{"encoding":"base64","value":"YmFy"}}"#.to_string(),
+            read_and_mp2json(&mut Cursor::new(b"\x81\xa3foo\xc4\x03bar")).unwrap(),
+            json!({"foo": {"encoding": "base64", "value": "YmFy"}})
         );
     }
 
     #[test]
     fn test_non_stringy_map() {
         assert_matches!(
-            read_and_convert_one(&mut Cursor::new(b"\x81\x01\x02")),
+            read_and_mp2json(&mut Cursor::new(b"\x81\x01\x02")),
             Err(Mp2JsonError::MapKeyNotString)
         );
     }
@@ -196,7 +191,7 @@ mod tests {
     #[test]
     fn test_invalid_string() {
         assert_matches!(
-            read_and_convert_one(&mut Cursor::new(b"\xa2\xc3(")),
+            read_and_mp2json(&mut Cursor::new(b"\xa2\xc3(")),
             Err(Mp2JsonError::InvalidString)
         );
     }
